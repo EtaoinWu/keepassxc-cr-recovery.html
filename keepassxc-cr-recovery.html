@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KeePassXC Yubikey Recovery Generator</title>
+</head>
+
+<body>
+  <h1>Keyfile Generator</h1>
+  For KeePassXC Yubikey recovery when you lost the yubikey.
+  <br>
+  <br>
+  For extra security, use devtools > network > throttle > offline to make sure
+  the secret never leaves your computer.
+  <br>
+  <br>
+  <form id="fileForm">
+    <label for="dbFile">Select Database File:</label>
+    <input type="file" id="dbFile" name="dbFile" required><br>
+    <label for="secret">Secret (hex-encoded):</label>
+    <input type="text" id="secret" name="secret" required><br>
+    <button type="submit">Generate Keyfile</button>
+  </form>
+  <div id="output"></div>
+
+  <script>
+    const fileVersionCriticalMask = 0xFFFF0000;
+    const argon2Salt = "S";
+    const endOfHeader = 0;
+    const endOfVariantMap = 0;
+    const kdfParameters = 11;
+
+    async function readSecret() {
+      const secretHex = document.getElementById('secret').value;
+      return hexToBytes(secretHex);
+    }
+
+    function readHeaderField(dataView, offset) {
+      const fieldID = dataView.getUint8(offset);
+      offset += 1;
+
+      if (fieldID === endOfHeader) {
+        return { moreFields: false, fieldID: 0, fieldData: null, offset };
+      }
+
+      const fieldLength = dataView.getUint32(offset, true);
+      offset += 4;
+
+      const fieldData = new Uint8Array(dataView.buffer, offset, fieldLength);
+      offset += fieldLength;
+
+      return { moreFields: true, fieldID, fieldData, offset };
+    }
+
+    function readVariantMap(dataView, offset) {
+      const version = dataView.getUint16(offset, true);
+      offset += 2;
+
+      let fieldType = dataView.getUint8(offset);
+      offset += 1;
+
+      while (fieldType !== endOfVariantMap) {
+        const nameLen = dataView.getUint32(offset, true);
+        offset += 4;
+
+        const nameBytes = new Uint8Array(dataView.buffer, offset, nameLen);
+        offset += nameLen;
+
+        const name = new TextDecoder().decode(nameBytes);
+
+        const valueLen = dataView.getUint32(offset, true);
+        offset += 4;
+
+        const value = new Uint8Array(dataView.buffer, offset, valueLen);
+        offset += valueLen;
+
+        console.log(fieldType, name, bytesToHex(value))
+
+        if (name === argon2Salt) {
+          return { value, offset };
+        }
+
+        fieldType = dataView.getUint8(offset);
+        offset += 1;
+      }
+
+      return { value: null, offset };
+    }
+
+    async function readKeepassHeader(dbFile) {
+      const buffer = await dbFile.arrayBuffer();
+      const dataView = new DataView(buffer);
+
+      let offset = 0;
+      const sig1 = dataView.getUint32(offset, true);
+      offset += 4;
+
+      const sig2 = dataView.getUint32(offset, true);
+      offset += 4;
+
+      let version = dataView.getUint32(offset, true);
+      offset += 4;
+
+      version &= fileVersionCriticalMask;
+
+      let moreFields = true;
+      let fieldID = 0;
+      let fieldData = null;
+
+      while (moreFields && fieldID !== kdfParameters) {
+        ({ moreFields, fieldID, fieldData, offset } = readHeaderField(dataView, offset));
+      }
+
+      const { value: seed } = readVariantMap(new DataView(new Uint8Array(fieldData).buffer), 0);
+      return seed;
+    }
+
+    async function generateKeyfile(event) {
+      event.preventDefault();
+
+      const dbFile = document.getElementById('dbFile').files[0];
+      const secret = await readSecret();
+
+      const challenge = await readKeepassHeader(dbFile);
+
+      if (challenge.length < 32) {
+        const padding = new Uint8Array(32 - challenge.length).fill(32 - challenge.length);
+        challenge = new Uint8Array([...challenge, ...padding]);
+      }
+
+      const key = await crypto.subtle.importKey(
+        'raw',
+        secret,
+        { name: 'HMAC', hash: 'SHA-1' },
+        false,
+        ['sign']
+      );
+
+      const hash = await crypto.subtle.sign('HMAC', key, challenge);
+      const hashHex = bytesToHex(new Uint8Array(hash));
+
+      const output = document.getElementById('output');
+      output.innerHTML = `<p>Generated Keyfile Hash: ${hashHex}</p>`;
+      // Add this line to trigger the keyfile download
+      downloadKeyfile(new Uint8Array(hash));
+    }
+
+    // Add this new function to handle the keyfile download
+    function downloadKeyfile(keyfileData) {
+      const blob = new Blob([keyfileData], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'cr-recovery-keyfile.key';
+      link.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function hexToBytes(hex) {
+      const bytes = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < hex.length; i += 2) {
+        bytes[i / 2] = parseInt(hex.substr(i, 2), 16);
+      }
+      return bytes;
+    }
+
+    function bytesToHex(bytes) {
+      return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+    }
+
+    document.getElementById('fileForm').addEventListener('submit', generateKeyfile);
+  </script>
+</body>
+
+</html>
