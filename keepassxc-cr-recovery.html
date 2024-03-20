@@ -9,7 +9,8 @@
 
 <body>
   <h1>Keyfile Generator</h1>
-  For KeePassXC Yubikey recovery when you lost the yubikey.
+  For KeePassXC Yubikey recovery when you lost the yubikey. 
+  Github Repo: <a href="https://github.com/EtaoinWu/keepassxc-cr-recovery.html">EtaoinWu/keepassxc-cr-recovery.html</a>.
   <br>
   <br>
   For extra security, use devtools > network > throttle > offline to make sure
@@ -143,11 +144,10 @@
 
       const output = document.getElementById('output');
       output.innerHTML = `<p>Generated Keyfile Hash: ${hashHex}</p>`;
-      // Add this line to trigger the keyfile download
+
       downloadKeyfile(new Uint8Array(hash));
     }
 
-    // Add this new function to handle the keyfile download
     function downloadKeyfile(keyfileData) {
       const blob = new Blob([keyfileData], { type: 'application/octet-stream' });
       const url = URL.createObjectURL(blob);
